@@ -117,12 +117,13 @@ ICECAdapter * Cec::CecInit(const char * name, CecCallback * callback) {
 	config.deviceTypes.Add(CEC_DEVICE_TYPE_PLAYBACK_DEVICE);
 	strncpy(config.strDeviceName, name, sizeof(config.strDeviceName));
 
-	callbacks.CBCecLogMessage           = &::cecLogMessage;
+	// callbacks.CBCecLogMessage           = &::cecLogMessage;
 	callbacks.CBCecKeyPress             = &::cecKeyPress;
 	callbacks.CBCecCommand              = &::cecCommand;
 	callbacks.CBCecConfigurationChanged = &::cecConfigurationChanged;
 	config.callbackParam                = callback;
 	config.callbacks                    = &callbacks;
+	config.bActivateSource              = false;
 
 	// LibCecInitialise is noisy, so we redirect cout to nowhere
 	RedirectStreamBuffer redirect(cout, 0);
@@ -162,12 +163,20 @@ void Cec::open() {
 		throw std::runtime_error("Failed to open adapter");
 	}
 
+	openState = true;
 	LOG4CPLUS_INFO(logger, "Opened " << devices[0].path);
 }
 
-void Cec::close() {
-	cec->SetInactiveView();
+bool Cec::isOpen(){
+	return openState;
+}
+
+void Cec::close(bool makeInactive) {
+	if (makeInactive){
+		cec->SetInactiveView();
+	}
 	cec->Close();
+	openState = false;
 }
 
 void Cec::makeActive() {

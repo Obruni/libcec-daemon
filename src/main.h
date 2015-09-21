@@ -1,6 +1,9 @@
 #include "uinput.h"
 #include "libcec.h"
+#include <string>
 #include <limits.h>
+
+using namespace std;
 
 class Main : public CecCallback {
 
@@ -13,6 +16,7 @@ class Main : public CecCallback {
 
 		// Some config params
 		bool makeActive;
+		string processName;
 
 		//
 		bool running; // TODO Change this to be threadsafe!. Voiatile or better
@@ -29,6 +33,9 @@ class Main : public CecCallback {
 
 		static const std::vector<__u16> & setupUinputMap();
 		
+		bool findProcess(string pName);
+		bool findProcess(string pName, bool par);
+
 		char *getCecName();
 
 	public:
@@ -46,6 +53,8 @@ class Main : public CecCallback {
 		void stop();
 
 		void listDevices();
+
+		void setPname(string pName);
 
 		void setMakeActive(bool active) {this->makeActive = active;};
 };

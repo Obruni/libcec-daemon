@@ -21,6 +21,8 @@
 #include <csignal>
 #include <vector>
 #include <unistd.h>
+#include <fnmatch.h>
+#include <fstream>
 
 #include <boost/program_options.hpp>
 #include "accumulator.hpp"
@@ -28,6 +30,8 @@
 #include <log4cplus/logger.h>
 #include <log4cplus/loggingmacros.h>
 #include <log4cplus/configurator.h>
+
+#include "proc/readproc.h"
 
 using namespace CEC;
 using namespace log4cplus;
@@ -70,16 +74,69 @@ void Main::loop() {
 		cec.makeActive();
 	}
 
+	bool processFound = false;
 	while (running) {
 		LOG4CPLUS_TRACE_STR(logger, "Loop");
 		sleep(1);
+		if (processName.size()){
+			/* don't connect to cec
+			 * in case the monitored process is running */
+			if (cec.isOpen()){
+				if(processFound){
+					cec.close(false);
+				}
+			}
+			if (!cec.isOpen()){
+				if(!processFound){
+					cec.open();
+				}
+			}
+			processFound = findProcess(processName);
+		}
 	}
-	cec.close();
+
+	LOG4CPLUS_DEBUG_STR(logger, "exiting main loop");
+	if (cec.isOpen()) {
+		cec.close(makeActive);
+	}
+	LOG4CPLUS_DEBUG_STR(logger, "exiting main loop");
+}
+
+bool Main::findProcess(string pName, bool pr) {
+	proc_t buf;
+	proc_t* pInfo = &buf;
+	PROCTAB* ptp;
+	bool procFound = false;
+
+	ptp = openproc( PROC_FILLSTAT | PROC_FILLSTATUS);
+	if (!ptp) {
+		LOG4CPLUS_ERROR(logger, "Error, can not access /proc");
+		return procFound;
+	}
+
+	memset((void*) pInfo, 0x00, sizeof(proc_t));
+	while (readproc(ptp, pInfo)) {
+		string cmdStr((const char*) pInfo->cmd);
+		if (cmdStr.find(pName) != string::npos) {
+			procFound = true;
+			break;
+		}
+	}
+	closeproc(ptp);
+
+	if (procFound){
+		LOG4CPLUS_TRACE(logger, "Process " << pName << " found!");
+	} else {
+		LOG4CPLUS_TRACE(logger, "Process " << pName << " not found!");
+	}
+
+	return procFound;
 }
 
 void Main::stop() {
 	LOG4CPLUS_TRACE_STR(logger, "Main::stop()");
 	running = false;
+	LOG4CPLUS_DEBUG_STR(logger, "Main::stop - set to false");
 }
 
 void Main::listDevices() {
@@ -102,6 +159,11 @@ char *Main::getCecName() {
 
 	return cec_name;
 }
+
+void Main::setPname(string pName){
+	LOG4CPLUS_INFO(logger, "monitored processes:" << pName );
+	this->processName = pName;
+};
 
 const std::vector<__u16> & Main::setupUinputMap() {
 	static std::vector<__u16> uinputCecMap;
@@ -180,7 +242,7 @@ const std::vector<__u16> & Main::setupUinputMap() {
 		uinputCecMap[CEC_USER_CONTROL_CODE_POWER_TOGGLE_FUNCTION       ] = 0;
 		uinputCecMap[CEC_USER_CONTROL_CODE_POWER_OFF_FUNCTION          ] = 0;
 		uinputCecMap[CEC_USER_CONTROL_CODE_POWER_ON_FUNCTION           ] = 0;
-		uinputCecMap[CEC_USER_CONTROL_CODE_F1_BLUE                     ] = KEY_BLUE;
+		uinputCecMap[CEC_USER_CONTROL_CODE_F1_BLUE                     ] = KEY_PROG1;//KEY_BLUE;
 		uinputCecMap[CEC_USER_CONTROL_CODE_F2_RED                      ] = KEY_RED;
 		uinputCecMap[CEC_USER_CONTROL_CODE_F3_GREEN                    ] = KEY_GREEN;
 		uinputCecMap[CEC_USER_CONTROL_CODE_F4_YELLOW                   ] = KEY_YELLOW;
@@ -251,6 +313,7 @@ int main (int argc, char *argv[]) {
 	    ("quiet,q",   "quiet output (print almost nothing)")
 	    ("donotactivate,a", "do not activate device on startup")
 	    ("usb", po::value<std::string>(), "USB adapter path (as shown by --list)")
+	    ("pname", po::value<std::string>(), "process name to be monitored; if provided, any running process with the provided name will prevent libcec-daemon from connecting to libcec")
 	;
 
 	po::positional_options_description p;
@@ -302,8 +365,12 @@ int main (int argc, char *argv[]) {
 			cout << vm["usb"].as< string >() << endl;
 		}
 
+		if (vm.count("pname")) {
+			main.setPname(vm["pname"].as< string >());
+		}
+
 		if (vm.count("daemon")) {
-			daemon(0, 0);
+			daemon(0, 1);
 		}
 
 		main.loop();
@@ -313,6 +380,53 @@ int main (int argc, char *argv[]) {
 		return -1;
 	}
 
+	LOG4CPLUS_DEBUG_STR(logger, "returning from main");
+
 	return 0;
 }
 
+
+int filter(const struct dirent *dir) {
+	return !fnmatch("[1-9]*", dir->d_name, 0);
+}
+
+bool Main::findProcess(string pName) {
+	/* Based on example in "man scandir" */
+
+	/* list of all pid subdirectories of/proc */
+	struct dirent **pidList;
+	/* return value */
+	bool retFound = false;
+	/* counter */
+	int n;
+
+	n = scandir("/proc", &pidList, filter, 0);
+	if (n < 0) {
+		perror("Not enough memory.");
+	} else {
+		while (n--) {
+			/* path to status file of current pid */
+			string fPath = "/proc/";
+			fPath.append(pidList[n]->d_name);
+			fPath += "/status";
+			//LOG4CPLUS_TRACE(logger, "Process: " << fPath);
+
+			/* open current pid's status file */
+			ifstream statusFile(fPath);
+			if (statusFile.good()) {
+				/* read first line */
+				string sLine;
+				getline(statusFile, sLine);
+				//LOG4CPLUS_TRACE(logger, "Status line: " << sLine);
+				/* check if the process name matches the monitored process */
+				if (sLine.find(pName) != string::npos) {
+					retFound = true;
+				}
+			}
+			statusFile.close();
+			free(pidList[n]);
+		}
+		free(pidList);
+	}
+	return retFound;
+}

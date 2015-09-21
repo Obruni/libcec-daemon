@@ -33,6 +33,9 @@ class Cec {
 		// Inits the CECAdapter and returns it
 		CEC::ICECAdapter * CecInit(const char * name, CecCallback *callback);
 
+		// Remember open state
+		bool openState = false;
+
 	public:
 
 		const static std::map<CEC::cec_user_control_code, const char *> cecUserControlCodeName;
@@ -51,9 +54,14 @@ class Cec {
 		void open();
 
 		/**
+		 * Tests if any adapter is opened
+		 */
+		bool isOpen();
+
+		/**
 		 * Closes the open adapter
 		 */
-		void close();
+		void close(bool makeInactive);
 
 		void makeActive();
 
